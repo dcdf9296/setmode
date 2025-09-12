@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+  /* Changed background color from #f9f9f9 to white */
+  background-color: white;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@layer base {
+  :root {
+    /* Updated color tokens to use black as primary instead of red */
+    --background: 0 0% 100%; /* Pure white background */
+    --foreground: 220 13% 18%; /* Dark gray text */
+    --card: 0 0% 97%; /* Light gray card background */
+    --card-foreground: 220 13% 18%; /* Dark gray card text */
+    --popover: 0 0% 100%; /* White popover background */
+    --popover-foreground: 220 13% 18%; /* Dark gray popover text */
+    --primary: 0 0% 9%; /* Black primary color */
+    --primary-foreground: 0 0% 100%; /* White text on primary */
+    --secondary: 0 0% 85%; /* Light gray secondary */
+    --secondary-foreground: 220 13% 18%; /* Dark gray text on secondary */
+    --muted: 0 0% 95%; /* Soft gray background */
+    --muted-foreground: 220 9% 46%; /* Medium gray text */
+    --accent: 0 0% 85%; /* Light gray accent */
+    --accent-foreground: 220 13% 18%; /* Dark gray accent text */
+    --destructive: 0 84% 60%; /* Red for destructive actions */
+    --destructive-foreground: 0 0% 100%; /* White text on destructive */
+    --border: 220 13% 91%; /* Light gray borders */
+    --input: 0 0% 97%; /* Light gray input background */
+    --ring: 0 0% 9% / 0.5; /* Black ring with opacity */
+    --chart-1: 0 0% 9%; /* Black */
+    --chart-2: 0 0% 85%; /* Light gray */
+    --chart-3: 0 0% 97%; /* Very light gray */
+    --chart-4: 0 0% 95%; /* Soft gray */
+    --chart-5: 0 0% 100%; /* White */
+    --radius: 0.75rem; /* Increased border radius for modern style */
+    --sidebar-background: 0 0% 97%; /* Light gray sidebar */
+    --sidebar-foreground: 220 13% 18%; /* Dark gray sidebar text */
+    --sidebar-primary: 0 0% 9%; /* Black for sidebar */
+    --sidebar-primary-foreground: 0 0% 100%; /* White sidebar primary text */
+    --sidebar-accent: 0 0% 85%; /* Light gray sidebar accent */
+    --sidebar-accent-foreground: 220 13% 18%; /* Dark gray sidebar accent text */
+    --sidebar-border: 220 13% 91%; /* Light gray sidebar border */
+    --sidebar-ring: 0 0% 9% / 0.5; /* Black sidebar ring */
+  }
+  .dark {
+    /* Updated dark mode tokens to use black theme */
+    --background: 220 13% 18%; /* Dark background */
+    --foreground: 0 0% 95%; /* Light text */
+    --card: 220 13% 15%; /* Darker card background */
+    --card-foreground: 0 0% 95%; /* Light card text */
+    --popover: 220 13% 15%; /* Dark popover background */
+    --popover-foreground: 0 0% 95%; /* Light popover text */
+    --primary: 0 0% 100%; /* White primary in dark mode */
+    --primary-foreground: 0 0% 9%; /* Black text on primary */
+    --secondary: 0 0% 25%; /* Dark gray secondary */
+    --secondary-foreground: 0 0% 95%; /* Light text on secondary */
+    --muted: 220 13% 25%; /* Dark muted background */
+    --muted-foreground: 220 9% 65%; /* Light muted text */
+    --accent: 0 0% 25%; /* Dark accent */
+    --accent-foreground: 0 0% 95%; /* Light accent text */
+    --destructive: 0 84% 60%; /* Red for destructive */
+    --destructive-foreground: 0 0% 100%; /* White destructive text */
+    --border: 220 13% 25%; /* Dark borders */
+    --input: 220 13% 25%; /* Dark input background */
+    --ring: 0 0% 100% / 0.5; /* White ring in dark mode */
+    --chart-1: 0 0% 100%; /* White */
+    --chart-2: 0 0% 85%; /* Light gray */
+    --chart-3: 220 13% 25%; /* Dark gray */
+    --chart-4: 220 13% 30%; /* Medium dark gray */
+    --chart-5: 220 13% 18%; /* Darkest gray */
+    --sidebar-background: 220 13% 15%; /* Dark sidebar */
+    --sidebar-foreground: 0 0% 95%; /* Light sidebar text */
+    --sidebar-primary: 0 0% 100%; /* White sidebar primary */
+    --sidebar-primary-foreground: 0 0% 9%; /* Black sidebar primary text */
+    --sidebar-accent: 0 0% 25%; /* Dark accent sidebar */
+    --sidebar-accent-foreground: 0 0% 95%; /* Light sidebar accent text */
+    --sidebar-border: 220 13% 25%; /* Dark sidebar border */
+    --sidebar-ring: 0 0% 100% / 0.5; /* White sidebar ring */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
