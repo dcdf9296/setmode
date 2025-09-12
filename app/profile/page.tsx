@@ -20,6 +20,7 @@ import ProfileLoading from "@/components/profile-loading"
 import { cn } from "@/lib/utils"
 import TopNav from "@/app/components/top-nav"
 import { getCurrentUser } from "@/lib/auth-simple"
+import { MapPin, Briefcase } from "lucide-react"
 
 interface User {
   id: string
@@ -164,12 +165,11 @@ export default function ProfilePage() {
     if (!user) return
 
     try {
-      const response = await fetch("/api/user/profile", {
+      const response = await fetch(`/api/user/profile?userId=${encodeURIComponent(user.id)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           full_name: editedName,
-          roles: [editedRole],
           location: editedLocation,
           profile_picture_url: editedAvatar,
           bio: editedBio,
@@ -306,10 +306,11 @@ export default function ProfilePage() {
       const response = await fetch("/api/upload", {
         method: "POST",
         body: formData,
+        cache: "no-store",
       })
 
       if (!response.ok) {
-        const errorData = await response.json()
+        const errorData = await response.json().catch(() => ({ }))
         throw new Error(errorData.error || "Failed to upload file")
       }
 
@@ -366,8 +367,8 @@ export default function ProfilePage() {
       value={value}
       className={cn(
         "justify-center rounded-full text-sm font-medium flex items-center gap-2 h-8",
-        "data-[state=active]:bg-white data-[state=active]:text-black data-[state=active]:shadow-sm",
-        "data-[state=inactive]:bg-transparent data-[state=inactive]:text-gray-500",
+        "data-[state=active]:bg-white data-[state=active]:text-black data-[state=active]:shadow-none data-[state=active]:border-0",
+        "data-[state=inactive]:bg-transparent data-[state=inactive]:text-gray-500"
       )}
     >
       {label}
@@ -406,26 +407,41 @@ export default function ProfilePage() {
       />
 
       <div className="relative z-10">
-        <TopNav />
-
         <div className="max-w-md mx-auto bg-white min-h-screen font-sans flex flex-col">
+          <TopNav />
+
           <div className="pt-4 px-4">
-            {/* Talent white card with margin below for consistent spacing */}
             <div className="relative mb-4">
               <div className="bg-white rounded-2xl shadow-lg hover:shadow-xl transition-shadow">
-                <div className="p-6">
-                  <div className="flex items-center gap-4">
+                <div className="p-4 flex items-center gap-4">
+                  <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-white flex-shrink-0">
                     <Image
-                      src={talentData.avatar || "/placeholder.svg"}
-                      alt={talentData.name}
-                      width={80}
-                      height={80}
-                      className="rounded-full object-cover"
+                      src={(user?.profile_picture_url as string) || "/logo-w-default.png"}
+                      alt={`${user?.full_name || "Profile"} avatar`}
+                      width={56}
+                      height={56}
+                      className="w-full h-full object-cover"
                     />
-                    <div className="flex-1">
-                      <h2 className="text-xl font-bold text-black">{talentData.name}</h2>
-                      <p className="text-gray-600">{talentData.role}</p>
-                      <p className="text-gray-500 text-sm">{talentData.location}</p>
+                  </div>
+                  <div className="flex-1 text-left">
+                    <h2 className="text-sm font-bold text-gray-900 mb-1">{user?.full_name}</h2>
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                      <Briefcase className="w-4 h-4 text-gray-600" />
+                      {Array.isArray(user?.roles) && user.roles.length > 0 ? (
+                        <div className="flex items-center gap-1 flex-wrap">
+                          {user.roles.map((r: string, idx: number) => (
+                            <Badge key={`${r}-${idx}`} variant="outline" className="font-normal capitalize text-xs py-px bg-transparent border-gray-300 text-gray-700">
+                              {r.replace("-", " ")}
+                            </Badge>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-gray-500">Role not specified</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 text-xs text-gray-600">
+                      <MapPin className="w-4 h-4 text-gray-600" />
+                      <span>{user?.location || "Location not specified"}</span>
                     </div>
                   </div>
                 </div>
@@ -544,13 +560,12 @@ export default function ProfilePage() {
                 </Card>
               </TabsContent>
 
-              {/* ... existing code for other tabs ... */}
               <TabsContent value="portfolio" className="m-0">
                 <div className="grid grid-cols-2 gap-2">
                   {editedPortfolio.map((item, index) => (
                     <div
                       key={item.id}
-                      className="relative aspect-square rounded-lg overflow-hidden bg-gray-100 group cursor-pointer shadow-lg hover:shadow-xl transition-shadow"
+                      className="relative aspect-square rounded-lg overflow-hidden bg-gray-100 group cursor-pointer"
                       onClick={() => {
                         if (isEditing) {
                           openPortfolioModal(item)
