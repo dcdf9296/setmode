@@ -90,7 +90,8 @@ export default function TalentHomePage() {
   const handleProfessionChange = (value: string) => {
     setSearchQuery(value)
     if (value.length > 0) {
-      const filtered = professions.filter((p) => p.toLowerCase().includes(searchQuery.toLowerCase()))
+      // BUGFIX: filter using the typed value instead of stale searchQuery state
+      const filtered = professions.filter((p) => p.toLowerCase().includes(value.toLowerCase()))
       setFilteredProfessions(filtered)
       setShowProfessionSuggestions(true)
     } else setShowProfessionSuggestions(false)

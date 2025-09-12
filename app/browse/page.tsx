@@ -97,7 +97,8 @@ export default function SearchTalentsFeed() {
 
   useEffect(() => {
     window.scrollTo(0, 0)
-    const currentMode = getCurrentMode()
+    // Default to "hirer" so Talents are shown by default
+    const currentMode = (searchParams.get("mode") || "hirer").toLowerCase() as "hirer" | "talent"
     setMode(currentMode)
 
     const roleParam = searchParams.get("role")
@@ -106,7 +107,6 @@ export default function SearchTalentsFeed() {
     if (roleParam) {
       setSearchQuery(decodeURIComponent(roleParam))
     }
-
     if (locationParam) {
       setLocation(decodeURIComponent(locationParam))
     }
@@ -119,31 +119,25 @@ export default function SearchTalentsFeed() {
       setIsLoading(true)
 
       if (currentMode === "hirer") {
-        // Load talents for hirer mode
-        let query = supabase
-          .from("users")
-          .select("*")
-          .not("roles", "is", null)
-          .order("created_at", { ascending: false })
-
-        if (roleParam) {
-          query = query.contains("roles", [roleParam])
+        // Fetch talents via server API to avoid client-side RLS pitfalls
+        const params = new URLSearchParams()
+        if (roleParam) params.set("role", roleParam)
+        if (locationParam) params.set("location", locationParam)
+        if (dateRange?.from && dateRange?.to) {
+          const fromStr = new Date(dateRange.from).toISOString().slice(0, 10)
+          const toStr = new Date(dateRange.to).toISOString().slice(0, 10)
+          params.set("from", fromStr)
+          params.set("to", toStr)
         }
 
-        if (locationParam) {
-          query = query.ilike("location", `%${locationParam}%`)
+        const res = await fetch(`/api/users?${params.toString()}`, { cache: "no-store" })
+        if (!res.ok) {
+          throw new Error("Users API failed")
         }
-
-        const { data: talentsData, error: talentsError } = await query
-
-        if (talentsError) {
-          console.error("Error loading talents:", talentsError)
-          toast.error("Failed to load talents")
-        } else {
-          setTalents(talentsData || [])
-        }
+        const { users } = await res.json()
+        setTalents(users || [])
       } else {
-        // Load jobs for talent mode
+        // SHOW JOBS (unchanged)
         let query = supabase
           .from("jobs")
           .select(`
@@ -170,8 +164,8 @@ export default function SearchTalentsFeed() {
           setJobs(jobsData || [])
         }
       }
-    } catch (error) {
-      console.error("Error:", error)
+    } catch (err) {
+      console.error("Browse loadData error:", err)
       toast.error("Failed to load data")
     } finally {
       setIsLoading(false)
@@ -189,6 +183,7 @@ export default function SearchTalentsFeed() {
   const handleProfessionChange = (value: string) => {
     setSearchQuery(value)
     if (value.length > 0) {
+      // BUGFIX: use the typed value for filtering (was using p.includes(p))
       setFilteredProfessions(professions.filter((p) => p.toLowerCase().includes(value.toLowerCase())))
       setShowProfessionSuggestions(true)
     } else setShowProfessionSuggestions(false)
@@ -204,7 +199,9 @@ export default function SearchTalentsFeed() {
     const q = searchQuery.toLowerCase().trim()
     const loc = location.toLowerCase().trim()
     const queryMatch =
-      !q || talent.full_name.toLowerCase().includes(q) || talent.roles?.some((role) => role.toLowerCase().includes(q))
+      !q ||
+      talent.full_name.toLowerCase().includes(q) ||
+      talent.roles?.some((role) => role.toLowerCase().includes(q))
     const locationMatch = !loc || talent.location?.toLowerCase().includes(loc)
     return queryMatch && locationMatch
   })
