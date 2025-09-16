@@ -11,6 +11,8 @@ import type { JobRole } from "@/lib/data-store"
 import { toast } from "sonner"
 import ModeSwitcher from "@/components/mode-switcher"
 import { Card, CardContent } from "@/components/ui/card"
+import { supabase } from "@/lib/supabase/client"
+import { getCurrentUser } from "@/lib/auth-simple"
 
 export default function CreateJobPage() {
   const router = useRouter()
@@ -61,52 +63,62 @@ export default function CreateJobPage() {
     setRoleEntries(updated)
   }
 
-  const handleSubmit = async () => {
-    if (!title.trim() || !description.trim() || !location.trim()) {
-      toast.error("Please fill in all required fields")
-      return
-    }
-
-    const incompleteRoles = roleEntries.some(
-      (role) => !role.role || !role.startDate || !role.endDate || role.budget <= 0,
-    )
-
-    if (incompleteRoles) {
-      toast.error("Please complete all role details")
-      return
-    }
-
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
     setIsSubmitting(true)
-
     try {
-      const jobData = {
-        title: title.trim(),
-        description: description.trim(),
-        location: location.trim(),
-        roles_needed: roleEntries.map((role) => role.role),
-        budget: Math.max(...roleEntries.map((role) => role.budget)),
-        currency: "EUR",
-        date: roleEntries[0].startDate,
-        status: "active",
+      // get user id from supabase OR custom auth
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      let hirerId = session?.user?.id || null
+      if (!hirerId) {
+        const simple = await getCurrentUser()
+        hirerId = simple?.id || null
+      }
+      if (!hirerId) {
+        toast.error("Please log in to create a job")
+        return
       }
 
-      console.log("[v0] Creating job with data:", jobData)
+      // Map UI fields to DB
+      const primaryRole = (roleEntries?.[0]?.role?.trim() || "unspecified") as string
+      const startDate = roleEntries?.[0]?.startDate || ""
+      const endDate = roleEntries?.[0]?.endDate || ""
+      const budget = roleEntries?.[0]?.budget || undefined
 
-      const response = await fetch("/api/jobs", {
+      // A single "date" string for DB; prefer endDate, else startDate, else empty
+      const displayDate = endDate || startDate || ""
+      // deadline (TIMESTAMPTZ in some schemas) can reuse endDate
+      const deadline = endDate || null
+
+      const res = await fetch("/api/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(jobData),
+        body: JSON.stringify({
+          title,
+          description,
+          location: location || "unspecified",
+          role: primaryRole,
+          budget,          // API maps to budget_min if needed
+          currency: "EUR",
+          date: displayDate, // DB "date" TEXT
+          deadline,          // DB "deadline" TIMESTAMPTZ (if present)
+          status: "active",  // visible in My Jobs
+          hirerId,
+          roleEntries,       // pass through in case API needs more mapping
+        }),
       })
 
-      const result = await response.json()
-      console.log("[v0] Job creation response:", result)
-
-      if (response.ok && result.job) {
-        toast.success("Job created successfully!")
-        router.push("/my-jobs")
-      } else {
-        throw new Error(result.error || "Failed to create job")
+      const data = await res.json()
+      if (!res.ok) {
+        console.error("Failed to create job:", data)
+        toast.error(data?.supabase || data?.message || "Failed to create job")
+        return
       }
+
+      toast.success("Job created")
+      router.push("/my-jobs")
     } catch (error) {
       console.error("[v0] Job creation error:", error)
       toast.error("Failed to create job. Please try again.")
@@ -118,7 +130,6 @@ export default function CreateJobPage() {
   return (
     <div className="min-h-screen bg-white antialiased font-sans">
       <div className="max-w-md mx-auto">
-        {/* Header */}
         <header className="fixed top-0 left-0 right-0 bg-white px-4 py-3 flex items-center justify-between z-40 max-w-md mx-auto h-16">
           <div className="flex items-center gap-2">
             <Button onClick={handleBack} variant="ghost" className="p-0">
@@ -135,13 +146,10 @@ export default function CreateJobPage() {
           </div>
         </header>
 
-        {/* Content */}
         <div className="pt-16 pb-32">
-          {/* Job Details */}
           <Card className="rounded-2xl border border-gray-200 bg-white mx-4 mb-6">
             <CardContent className="p-6">
               <h2 className="text-lg font-bold text-gray-900 mb-4">Job Details</h2>
-
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-semibold text-gray-900 mb-2">Job Title</label>
@@ -152,7 +160,6 @@ export default function CreateJobPage() {
                     className="bg-white text-black border-gray-200 focus:border-black focus:ring-black rounded-full placeholder:text-gray-500"
                   />
                 </div>
-
                 <div>
                   <label className="block text-sm font-semibold text-gray-900 mb-2">Description</label>
                   <Textarea
@@ -162,7 +169,6 @@ export default function CreateJobPage() {
                     className="bg-white text-black border-gray-200 focus:border-black focus:ring-black rounded-2xl placeholder:text-gray-500 min-h-[100px]"
                   />
                 </div>
-
                 <div>
                   <label className="block text-sm font-semibold text-gray-900 mb-2">Location</label>
                   <div className="relative">
@@ -179,7 +185,6 @@ export default function CreateJobPage() {
             </CardContent>
           </Card>
 
-          {/* Roles & Details */}
           <Card className="rounded-2xl border border-gray-200 bg-white mx-4 mb-6">
             <CardContent className="p-6">
               <div className="flex items-center justify-between mb-4">
@@ -192,7 +197,6 @@ export default function CreateJobPage() {
                   Add Role
                 </Button>
               </div>
-
               <div className="space-y-4">
                 {roleEntries.map((role, index) => (
                   <div key={role.id} className="border-b border-gray-200 pb-4 mb-4">
@@ -208,7 +212,6 @@ export default function CreateJobPage() {
                         </Button>
                       )}
                     </div>
-
                     <div className="space-y-3">
                       <div>
                         <label className="block text-xs font-medium text-gray-700 mb-1">Role Type</label>
@@ -226,7 +229,6 @@ export default function CreateJobPage() {
                           </SelectContent>
                         </Select>
                       </div>
-
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
@@ -253,7 +255,6 @@ export default function CreateJobPage() {
                           </div>
                         </div>
                       </div>
-
                       <div>
                         <label className="block text-xs font-medium text-gray-700 mb-1">Daily Budget (€)</label>
                         <div className="relative">
@@ -274,8 +275,6 @@ export default function CreateJobPage() {
             </CardContent>
           </Card>
         </div>
-
-        {/* Fixed Bottom Button */}
         <div
           className="fixed bottom-0 left-0 right-0 z-40 max-w-md mx-auto bg-white rounded-t-xl"
           style={{ paddingBottom: "80px" }}

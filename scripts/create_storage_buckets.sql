@@ -1,5 +1,7 @@
 -- Create storage buckets for user files
-INSERT INTO storage.buckets (id, name, public) VALUES ('user-files', 'user-files', true);
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('user-files', 'user-files', true)
+ON CONFLICT (id) DO NOTHING;
 
 -- Allow anonymous uploads during registration and authenticated user uploads
 CREATE POLICY "Allow anonymous uploads during registration" ON storage.objects

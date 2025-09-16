@@ -31,3 +31,10 @@ CREATE TABLE IF NOT EXISTS contacts (
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email);
+
+-- Additions
+-- Ensure pgcrypto is available for gen_random_uuid in case it's missing
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Prevent duplicate contact emails per user
+CREATE UNIQUE INDEX IF NOT EXISTS uq_contacts_user_email ON contacts(user_id, email);

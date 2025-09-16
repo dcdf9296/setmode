@@ -1,76 +1,156 @@
-import { type NextRequest, NextResponse } from "next/server"
-import { createServerSupabaseClient } from "@/lib/supabase/server"
+import { NextRequest, NextResponse } from "next/server"
 
-export async function GET(request: NextRequest) {
+const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
+
+export async function GET(req: NextRequest) {
   try {
-    const supabase = createServerSupabaseClient()
-    const { searchParams } = new URL(request.url)
+    const { searchParams } = new URL(req.url)
+    const id = searchParams.get("id")
+    const hirerIdParam = searchParams.get("hirerId") || ""
+    const role = searchParams.get("role") || ""
+    const location = searchParams.get("location") || ""
 
-    const role = searchParams.get("role")
-    const location = searchParams.get("location")
-    const status = searchParams.get("status") || "active"
+    const select = "*,hirer:users!jobs_hirer_id_fkey(full_name,profile_picture_url)"
+    let url = `${SB_URL}/rest/v1/jobs?select=${encodeURIComponent(select)}&order=created_at.desc`
 
-    let query = supabase
-      .from("jobs")
-      .select(`
-        *,
-        hirer:users!jobs_hirer_id_fkey(full_name, profile_picture_url)
-      `)
-      .eq("status", status)
-      .order("created_at", { ascending: false })
-
-    if (role) {
-      query = query.eq("role", role)
+    if (id) {
+      url += `&id=eq.${encodeURIComponent(id)}`
+    } else {
+      const ids = hirerIdParam.split(",").map((s) => s.trim()).filter(Boolean)
+      if (ids.length === 0) {
+        return NextResponse.json({ message: "hirerId required when id is not provided" }, { status: 400 })
+      }
+      url += ids.length === 1
+        ? `&hirer_id=eq.${encodeURIComponent(ids[0])}`
+        : `&hirer_id=in.(${ids.join(",")})`
     }
 
+    if (role) url += `&role=eq.${encodeURIComponent(role)}`
     if (location) {
-      query = query.eq("location", location)
+      const loc = encodeURIComponent(`%${location}%`)
+      url += `&location=ilike.${loc}`
     }
 
-    const { data: jobs, error } = await query
+    const res = await fetch(url, {
+      headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
+      cache: "no-store",
+    })
 
-    if (error) {
-      console.error("Error fetching jobs:", error)
-      return NextResponse.json({ error: "Failed to fetch jobs" }, { status: 500 })
+    if (!res.ok) {
+      const txt = await res.text()
+      return NextResponse.json({ message: "Failed to load jobs", error: txt }, { status: 500 })
     }
 
+    const rows = await res.json()
+
+    // Normalize common UI fields so the page mapping works
+    const normalize = (j: any) => ({
+      ...j,
+      budget: j.budget ?? null,
+      start_date: j.start_date ?? j.date ?? null,
+      end_date: j.end_date ?? (j.deadline ? new Date(j.deadline).toISOString().slice(0, 10) : null),
+      roles_needed:
+        Array.isArray(j.roles_needed) && j.roles_needed.length > 0 ? j.roles_needed : j.role ? [j.role] : [],
+    })
+
+    if (id) {
+      const row = rows?.[0] || null
+      return NextResponse.json({ job: row ? normalize(row) : null })
+    }
+
+    const jobs = (rows || []).map(normalize)
     return NextResponse.json({ jobs })
-  } catch (error) {
-    console.error("Error:", error)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+  } catch (e) {
+    console.error("GET /api/jobs error", e)
+    return NextResponse.json({ message: "Server error" }, { status: 500 })
   }
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
-    const supabase = createServerSupabaseClient()
-    const body = await request.json()
+    const body = await req.json()
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    const hirer_id = body.hirerId || body.createdBy || req.headers.get("x-user-id")
+    if (!hirer_id) {
+      return NextResponse.json({ message: "hirerId is required" }, { status: 400 })
+    }
+    if (!body?.title) {
+      return NextResponse.json({ message: "title is required" }, { status: 400 })
     }
 
-    const { data: job, error } = await supabase
-      .from("jobs")
-      .insert({
-        ...body,
-        hirer_id: session.user.id,
-        status: "active",
-      })
-      .select()
-      .single()
+    // Map UI fields -> DB (UI-first)
+    const role =
+      body.role ??
+      (Array.isArray(body.rolesNeeded) && body.rolesNeeded[0]) ??
+      (Array.isArray(body.roleEntries) && body.roleEntries[0]?.role) ??
+      "unspecified"
+    const location = body.location || "unspecified"
 
-    if (error) {
-      console.error("Error creating job:", error)
-      return NextResponse.json({ error: "Failed to create job" }, { status: 500 })
+    const startDate =
+      body.startDate ??
+      (Array.isArray(body.roleEntries) ? body.roleEntries[0]?.startDate : null) ??
+      body.date ??
+      null
+    const endDate =
+      body.endDate ??
+      (Array.isArray(body.roleEntries) ? body.roleEntries[0]?.endDate : null) ??
+      body.deadline ??
+      null
+
+    const budget = body.budget ?? (Array.isArray(body.roleEntries) ? body.roleEntries[0]?.budget : null)
+
+    const roles_needed = Array.isArray(body.rolesNeeded)
+      ? body.rolesNeeded
+      : Array.isArray(body.roleEntries)
+        ? body.roleEntries.map((r: any) => r?.role).filter(Boolean)
+        : role
+          ? [role]
+          : []
+
+    // Only send columns that exist in your current schema (no budget_min/budget_max)
+    const payload: Record<string, any> = {
+      title: body.title,
+      description: body.description ?? null,
+      location,
+      status: normalizeStatus(body.status || "active"),
+      hirer_id,
+      // UI-friendly columns
+      start_date: startDate ?? null,
+      end_date: endDate ?? null,
+      budget: budget ?? null,
+      roles_needed: roles_needed.length ? roles_needed : null,
+      // If your table still has "role" column and it's required, keep it.
+      // If you removed it, you can comment the next line out:
+      role,
     }
 
+    // Remove undefined keys
+    Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k])
+
+    const resp = await fetch(`${SB_URL}/rest/v1/jobs`, {
+      method: "POST",
+      headers: {
+        apikey: SB_KEY,
+        Authorization: `Bearer ${SB_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify(payload),
+    })
+
+    const text = await resp.text()
+    if (!resp.ok) {
+      return NextResponse.json(
+        { message: "Failed to create job", supabase: text || "no body", status: resp.status },
+        { status: 400 },
+      )
+    }
+
+    const [job] = text ? JSON.parse(text) : []
     return NextResponse.json({ job })
-  } catch (error) {
-    console.error("Error:", error)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+  } catch (e) {
+    console.error("POST /api/jobs error", e)
+    return NextResponse.json({ message: "Server error" }, { status: 500 })
   }
 }

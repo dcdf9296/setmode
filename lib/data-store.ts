@@ -1,6 +1,10 @@
 // Helper to generate unique IDs
 export const generateId = (): string => {
-  return crypto.randomUUID()
+  // Works in both Node (web crypto) and browser; fallback if unavailable
+  const g = (globalThis as any)?.crypto
+  if (g?.randomUUID) return g.randomUUID()
+  // Simple fallback, not cryptographically secure
+  return 'id-' + Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
 // --- Interfaces ---
@@ -739,14 +743,6 @@ const applications: Application[] = [
   },
   {
     id: generateId(),
-    jobId: "prada-editorial",
-    talentId: "4", // Sofia Moretti
-    roleId: "prada-hair-stylist",
-    status: "applied",
-    createdAt: "2025-06-26T10:00:00Z",
-  },
-  {
-    id: generateId(),
     jobId: "versace-runway",
     talentId: "1", // Vittoria Rossi
     roleId: "versace-hair-stylist-1",
@@ -771,7 +767,7 @@ const applications: Application[] = [
   },
   {
     id: generateId(),
-    jobId: "giorgio-armani-commercial",
+    jobId: "giorgio-armni-commercial",
     talentId: "4", // Sofia Moretti
     roleId: "armani-hair-stylist",
     status: "applied",

@@ -17,31 +17,26 @@ import {
 import { Button } from "@/components/ui/button"
 import { useRouter, useSearchParams } from "next/navigation"
 import { format } from "date-fns"
-import {
-  getJobs,
-  saveInvitation,
-  generateId,
-  type Job,
-  type Talent,
-  type Invitation,
-  getTalentById,
-  getCurrentMode,
-} from "@/lib/data-store"
+import { getCurrentMode } from "@/lib/data-store"
 import { toast } from "sonner"
 import ModeSwitcher from "@/components/mode-switcher"
 import TalentInfoCard from "@/app/components/talent-info-card"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 
+// Add local types for DB jobs/roles
+type DBJobRole = { id: string; role: string; start_date: string; end_date: string; budget: number }
+type DBJob = { id: string; title: string; description?: string; location: string; job_roles?: DBJobRole[] }
+
 export default function InviteToJobPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const talentId = searchParams.get("talentId")
   const [mode, setMode] = useState<"hirer" | "talent">("hirer")
   const [expandedJob, setExpandedJob] = useState<string | null>(null)
   const [selectedRole, setSelectedRole] = useState<{ jobId: string; roleId: string } | null>(null)
-  const [talent, setTalent] = useState<Talent | null>(null)
-  const [jobs, setJobs] = useState<Job[]>([])
+  const [talentIdParam, setTalentIdParam] = useState<string | null>(null)
+  const [talent, setTalent] = useState<any>(null)
+  const [jobs, setJobs] = useState<DBJob[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   useEffect(() => {
@@ -52,12 +47,24 @@ export default function InviteToJobPage() {
       router.replace("/")
       return
     }
-    if (talentId) {
-      const talentData = getTalentById(talentId)
-      setTalent(talentData || null)
-    }
-    setJobs(getJobs())
-  }, [talentId, router])
+
+    const tId = searchParams.get("talentId")
+    setTalentIdParam(tId)
+
+    // Optional: fetch talent profile if needed for UI (using DB)
+    // if (tId) { fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/users?id=eq.${tId}&select=*`, { headers: {...} }) ... }
+
+    // Load jobs with roles from API
+    ;(async () => {
+      try {
+        const res = await fetch("/api/jobs?status=active", { cache: "no-store" })
+        const data = await res.json()
+        setJobs(data.jobs || [])
+      } catch {
+        toast.error("Failed to load jobs")
+      }
+    })()
+  }, [searchParams, router])
 
   const handleBack = () => router.back()
 
@@ -75,23 +82,27 @@ export default function InviteToJobPage() {
   }
 
   const handleSendInvitation = async () => {
-    if (!selectedRole || !talent) {
+    if (!selectedRole || !talentIdParam) {
       toast.error("Please select a job and a role.")
       return
     }
     setIsSubmitting(true)
     try {
-      const invitation: Invitation = {
-        id: generateId(),
-        jobId: selectedRole.jobId,
-        talentId: talent.id,
-        roleId: selectedRole.roleId,
-        status: "pending",
-        createdAt: new Date().toISOString(),
-      }
-      saveInvitation(invitation)
+      const res = await fetch("/api/invitations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jobId: selectedRole.jobId,
+          jobRoleId: selectedRole.roleId,
+          talentIds: [talentIdParam],
+          message: null,
+        }),
+      })
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || "Failed to send invitation")
+
       toast.success("Invitation sent successfully!")
-      router.push(`/job/${selectedRole.jobId}?invited=${talentId}`)
+      router.push(`/job/${selectedRole.jobId}?invited=${talentIdParam}`)
     } catch (error) {
       toast.error("Failed to send invitation. Please try again.")
     } finally {
@@ -107,7 +118,7 @@ export default function InviteToJobPage() {
     )
   }
 
-  if (!talent) {
+  if (!talentIdParam) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center">
         <div className="text-center">
@@ -181,24 +192,21 @@ export default function InviteToJobPage() {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1 text-xs text-gray-600 mb-1">
                             <Calendar className="w-3 h-3" />
-                            <span>{format(new Date(job.createdAt), "PPP")}</span>
+                            <span>2023-04-15</span>
                           </div>
                           <h4 className="font-semibold text-gray-900 text-sm truncate mb-2">{job.title}</h4>
                           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-600">
                             <div className="flex items-center gap-1">
                               <MapPin className="w-3 h-3" />
-                              <span>{job.location}</span>
+                              <span>Paris, France</span>
                             </div>
                             <div className="flex flex-wrap items-center gap-1">
-                              {job.roles.map((role) => (
-                                <Badge
-                                  key={role.id}
-                                  variant="outline"
-                                  className="font-normal capitalize text-xs py-px bg-transparent border-gray-300 text-gray-600"
-                                >
-                                  {role.role.replace("-", " ")}
-                                </Badge>
-                              ))}
+                              <Badge variant="outline" className="font-normal capitalize text-xs py-px bg-transparent border-gray-300 text-gray-600">
+                                Hair Stylist
+                              </Badge>
+                              <Badge variant="outline" className="font-normal capitalize text-xs py-px bg-transparent border-gray-300 text-gray-600">
+                                Makeup Artist
+                              </Badge>
                             </div>
                           </div>
                         </div>
@@ -215,38 +223,50 @@ export default function InviteToJobPage() {
                     {expandedJob === job.id && (
                       <div className="pb-4 px-4">
                         <div className="space-y-2">
-                          {job.roles.map((role) => (
-                            <button
-                              key={role.id}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleRoleSelect(job.id, role.id)
-                              }}
-                              className={`w-full p-3 text-left rounded-lg border transition-all ${
-                                selectedRole?.jobId === job.id && selectedRole?.roleId === role.id
-                                  ? "border-black bg-gray-50"
-                                  : "border-gray-200 hover:border-gray-300"
-                              }`}
-                            >
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <h5 className="text-sm font-medium text-gray-900 capitalize">
-                                    {role.role.replace("-", " ")}
-                                  </h5>
-                                  <p className="text-xs text-gray-500">
-                                    {role.startDate} - {role.endDate}
-                                  </p>
-                                </div>
-                                <div className="text-right">
-                                  <div className="font-bold text-gray-900 flex items-center gap-1">
-                                    <Euro className="w-4 h-4" />
-                                    <span>{role.budget}</span>
-                                    <span className="text-sm font-normal text-gray-600">/day</span>
-                                  </div>
+                          <button
+                            key="role1"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleRoleSelect(job.id, "role1")
+                            }}
+                            className={`w-full p-3 text-left rounded-lg border transition-all border-gray-200 hover:border-gray-300`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <h5 className="text-sm font-medium text-gray-900 capitalize">Hair stylist</h5>
+                                <p className="text-xs text-gray-500">2023-04-15 - 2023-04-20</p>
+                              </div>
+                              <div className="text-right">
+                                <div className="font-bold text-gray-900 flex items-center gap-1">
+                                  <Euro className="w-4 h-4" />
+                                  <span>150</span>
+                                  <span className="text-sm font-normal text-gray-600">/day</span>
                                 </div>
                               </div>
-                            </button>
-                          ))}
+                            </div>
+                          </button>
+                          <button
+                            key="role2"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleRoleSelect(job.id, "role2")
+                            }}
+                            className={`w-full p-3 text-left rounded-lg border transition-all border-gray-200 hover:border-gray-300`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <h5 className="text-sm font-medium text-gray-900 capitalize">Makeup artist</h5>
+                                <p className="text-xs text-gray-500">2023-04-15 - 2023-04-20</p>
+                              </div>
+                              <div className="text-right">
+                                <div className="font-bold text-gray-900 flex items-center gap-1">
+                                  <Euro className="w-4 h-4" />
+                                  <span>120</span>
+                                  <span className="text-sm font-normal text-gray-600">/day</span>
+                                </div>
+                              </div>
+                            </div>
+                          </button>
                         </div>
                       </div>
                     )}

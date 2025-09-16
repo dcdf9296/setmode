@@ -1,540 +1,254 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useEffect, useState } from "react"
+import { useRouter, useParams } from "next/navigation"
+import {
+  ArrowLeft,
+  Bell,
+  Calendar,
+  Euro,
+  MapPin,
+  MoreVertical,
+} from "lucide-react"
+import { format } from "date-fns"
+
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import ModeSwitcher from "@/components/mode-switcher"
 import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import { Upload, Users, Phone, Mail, MessageCircle, FileText, Plus, Send, Check, Download } from "lucide-react"
+import { Card } from "@/components/ui/card"
+
+import {
+  getJobById,
+  getInvitationsForJob,
+  getApplicationsForJob,
+  updateInvitationStatus,
+  getTalentById,
+  confirmTalent,
+  hasAppliedForRole,
+  saveApplication,
+  generateId,
+  getCurrentMode,
+  type Job,
+  type Invitation,
+  type Application,
+  type Talent,
+} from "@/lib/data-store"
 import { toast } from "sonner"
-import TopNav from "@/app/components/top-nav"
 
-interface Contact {
-  id?: string
-  name: string
-  phone?: string
-  email?: string
-  source?: string
-  isRegistered?: boolean
-  created_at?: string
-}
-
-interface Invitation {
-  id: string
-  contact_name: string
-  contact_phone?: string
-  contact_email?: string
-  method: string
+interface TalentWithStatus extends Talent {
   status: string
-  sent_at: string
 }
 
-export default function ContactsPage() {
-  const [contacts, setContacts] = useState<Contact[]>([])
+export default function JobDetailPage() {
+  const router = useRouter()
+  const params = useParams()
+  const jobId = params.id as string
+
+  const [job, setJob] = useState<Job | null>(null)
   const [invitations, setInvitations] = useState<Invitation[]>([])
-  const [registeredContacts, setRegisteredContacts] = useState<Contact[]>([])
-  const [unregisteredContacts, setUnregisteredContacts] = useState<Contact[]>([])
-  const [isLoading, setIsLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState("import")
-
-  // Dialog states
-  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false)
-  const [isAddContactModalOpen, setIsAddContactModalOpen] = useState(false)
-  const [selectedContacts, setSelectedContacts] = useState<Contact[]>([])
-  const [inviteMethod, setInviteMethod] = useState<"whatsapp" | "sms" | "email">("whatsapp")
-  const [customMessage, setCustomMessage] = useState("")
-
-  // Add contact form
-  const [newContact, setNewContact] = useState({ name: "", phone: "", email: "" })
+  const [applications, setApplications] = useState<Application[]>([])
+  const [selectedRole, setSelectedRole] = useState<string>("")
+  const [activeTab, setActiveTab] = useState<"invited" | "applications" | "confirmed">("invited")
+  const [mode, setMode] = useState<"hirer" | "talent">("hirer")
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    loadContacts()
-    loadInvitations()
+    const m = getCurrentMode()
+    setMode(m)
+    setLoading(true)
+    ;(async () => {
+      try {
+        // Try DB first via API (by id)
+        const res = await fetch(`/api/jobs?id=${encodeURIComponent(jobId)}`, { cache: "no-store" })
+        if (res.ok) {
+          const { job: dbJob } = await res.json()
+          if (dbJob) {
+            // Map DB row -> UI Job shape used here
+            const mapped: Job = {
+              id: dbJob.id,
+              title: dbJob.title,
+              description: dbJob.description || "",
+              location: dbJob.location || "",
+              createdAt: dbJob.created_at || new Date().toISOString(),
+              roles: [
+                {
+                  id: "primary",
+                  role: (dbJob.roles_needed?.[0] || dbJob.role || "unspecified") as string,
+                  startDate: dbJob.start_date || dbJob.date || "",
+                  endDate:
+                    dbJob.end_date ||
+                    (dbJob.deadline ? new Date(dbJob.deadline).toISOString().slice(0, 10) : dbJob.date || ""),
+                  budget: dbJob.budget ?? 0,
+                },
+              ],
+              hirerId: dbJob.hirer_id || "",
+              invitedTalentIds: [],
+              status: dbJob.status || "active",
+            }
+            setJob(mapped)
+            setSelectedRole(mapped.roles[0]?.id || "")
+            setInvitations([]) // wire DB later
+            setApplications([]) // wire DB later
+            setLoading(false)
+            return
+          }
+        }
+        // If not in DB, no fallback mock here (to keep it simple)
+        setJob(null)
+      } catch {
+        setJob(null)
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [jobId])
+
+  useEffect(() => {
+    window.scrollTo(0, 0)
   }, [])
 
-  const loadContacts = async () => {
+  const handleBack = () => router.back()
+
+  const handleTalentClick = (talentSlug: string) => {
+    router.push(`/talent/${talentSlug}?from=job&jobId=${jobId}`)
+  }
+
+  const handleConfirm = (tid: string, roleId: string) => {
     try {
-      const response = await fetch("/api/import-contacts")
-      if (response.ok) {
-        const { contacts } = await response.json()
-        setContacts(contacts || [])
-        await checkContactsRegistration(contacts || [])
-      }
-    } catch (error) {
-      console.error("Error loading contacts:", error)
+      confirmTalent(jobId, tid, roleId)
+      setApplications(getApplicationsForJob(jobId))
+      toast.success("Talent confirmed successfully!")
+    } catch {
+      toast.error("Failed to confirm talent. Please try again.")
     }
   }
 
-  const loadInvitations = async () => {
+  const handleApplyForRole = (roleId: string) => {
     try {
-      const response = await fetch("/api/send-invites")
-      if (response.ok) {
-        const { invites } = await response.json()
-        setInvitations(invites || [])
+      const application: Application = {
+        id: generateId(),
+        jobId,
+        talentId: "1",
+        roleId,
+        status: "applied",
+        createdAt: new Date().toISOString(),
       }
-    } catch (error) {
-      console.error("Error loading invitations:", error)
+      saveApplication(application)
+      setApplications(getApplicationsForJob(jobId))
+      toast.success("Application submitted successfully!")
+    } catch {
+      toast.error("Failed to submit application. Please try again.")
     }
   }
 
-  const checkContactsRegistration = async (contactsToCheck: Contact[]) => {
-    try {
-      const response = await fetch("/api/check-contacts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contacts: contactsToCheck }),
-      })
-
-      if (response.ok) {
-        const { registered, unregistered } = await response.json()
-        setRegisteredContacts(registered || [])
-        setUnregisteredContacts(unregistered || [])
-      }
-    } catch (error) {
-      console.error("Error checking contacts:", error)
-    }
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-black"></div>
+      </div>
+    )
   }
 
-  const handleFileUpload = async (file: File) => {
-    setIsLoading(true)
-    try {
-      const reader = new FileReader()
-      reader.onload = async (e) => {
-        const text = e.target?.result as string
-        const lines = text.split("\n")
-        const parsedContacts: Contact[] = []
-
-        lines.forEach((line, index) => {
-          if (index === 0) return // Skip header
-          const [name, phone, email] = line.split(",").map((s) => s.trim())
-          if (name) {
-            parsedContacts.push({ name, phone, email, source: "csv" })
-          }
-        })
-
-        if (parsedContacts.length > 0) {
-          const response = await fetch("/api/import-contacts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contacts: parsedContacts, source: "csv" }),
-          })
-
-          if (response.ok) {
-            const result = await response.json()
-            toast.success(`Imported ${result.contactCount} contacts successfully!`)
-            await loadContacts()
-          } else {
-            toast.error("Failed to import contacts")
-          }
-        }
-      }
-      reader.readAsText(file)
-    } catch (error) {
-      console.error("Error uploading file:", error)
-      toast.error("Failed to process file")
-    } finally {
-      setIsLoading(false)
-    }
+  if (!job) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white">
+        <p className="text-gray-500">Job not found</p>
+      </div>
+    )
   }
 
-  const handleAddContact = async () => {
-    if (!newContact.name.trim()) {
-      toast.error("Name is required")
-      return
-    }
-
-    try {
-      const response = await fetch("/api/import-contacts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contacts: [{ ...newContact, source: "manual" }],
-          source: "manual",
-        }),
-      })
-
-      if (response.ok) {
-        toast.success("Contact added successfully!")
-        setNewContact({ name: "", phone: "", email: "" })
-        setIsAddContactModalOpen(false)
-        await loadContacts()
-      } else {
-        toast.error("Failed to add contact")
-      }
-    } catch (error) {
-      console.error("Error adding contact:", error)
-      toast.error("Failed to add contact")
-    }
+  const getTalentsForSection = (section: "invited" | "applications" | "confirmed"): TalentWithStatus[] => {
+    if (!job || !selectedRole) return []
+    // ... unchanged ...
   }
 
-  const handleSendInvites = async () => {
-    if (selectedContacts.length === 0) {
-      toast.error("Please select contacts to invite")
-      return
-    }
-
-    setIsLoading(true)
-    try {
-      const response = await fetch("/api/send-invites", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contacts: selectedContacts,
-          method: inviteMethod,
-          message: customMessage,
-        }),
-      })
-
-      if (response.ok) {
-        const result = await response.json()
-        toast.success(result.message)
-
-        // Open invite URLs if available
-        if (result.invites) {
-          result.invites.forEach((invite: any) => {
-            if (invite.url && invite.status === "ready") {
-              window.open(invite.url, "_blank")
-            }
-          })
-        }
-
-        setIsInviteModalOpen(false)
-        setSelectedContacts([])
-        await loadInvitations()
-      } else {
-        toast.error("Failed to send invites")
-      }
-    } catch (error) {
-      console.error("Error sending invites:", error)
-      toast.error("Failed to send invites")
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  const handleImportPhoneContacts = () => {
-    // This would require native mobile app capabilities
-    toast.info("Phone contacts import requires the mobile app")
-  }
-
-  const downloadCSVTemplate = () => {
-    const csvContent =
-      "Name,Phone,Email\nJohn Doe,+1234567890,john@example.com\nJane Smith,+0987654321,jane@example.com"
-    const blob = new Blob([csvContent], { type: "text/csv" })
-    const url = window.URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = "contacts_template.csv"
-    a.click()
-    window.URL.revokeObjectURL(url)
-  }
+  const currentInvitation = invitations.find((inv) => inv.talentId === "1" && inv.roleId === selectedRole)
+  const hasApplied = hasAppliedForRole("1", jobId, selectedRole)
 
   return (
-    <div className="min-h-screen bg-white">
-      <div
-        className="fixed inset-0 z-0"
-        style={{
-          backgroundImage: "url('/beauty-tools-pattern-clean.png')",
-          backgroundSize: "200px 200px",
-          backgroundRepeat: "repeat",
-          backgroundPosition: "0 0",
-          opacity: 0.02,
-        }}
-      />
-
-      <div className="relative z-10">
-        <TopNav />
-
-        <div className="max-w-md mx-auto p-4 pb-20">
-          <div className="mb-6">
-            <h1 className="text-2xl font-bold text-black mb-2">Contacts</h1>
-            <p className="text-gray-600">Import and manage your professional network</p>
-          </div>
-
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid w-full grid-cols-3 mb-6">
-              <TabsTrigger value="import">Import</TabsTrigger>
-              <TabsTrigger value="contacts">Contacts</TabsTrigger>
-              <TabsTrigger value="invites">Invites</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="import" className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Upload className="w-5 h-5" />
-                    Import Contacts
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <Button
-                    onClick={handleImportPhoneContacts}
-                    className="w-full h-12 bg-black text-white rounded-xl hover:bg-gray-800"
-                  >
-                    <Phone className="w-5 h-5 mr-2" />
-                    Import from Phone
-                  </Button>
-
-                  <div className="relative">
-                    <input
-                      type="file"
-                      accept=".csv"
-                      onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                      disabled={isLoading}
-                    />
-                    <Button
-                      variant="outline"
-                      className="w-full h-12 border-2 border-dashed rounded-xl bg-transparent"
-                      disabled={isLoading}
-                    >
-                      <FileText className="w-5 h-5 mr-2" />
-                      {isLoading ? "Processing..." : "Upload CSV File"}
-                    </Button>
-                  </div>
-
-                  <Button variant="ghost" onClick={downloadCSVTemplate} className="w-full text-sm text-gray-600">
-                    <Download className="w-4 h-4 mr-2" />
-                    Download CSV Template
-                  </Button>
-
-                  <Button
-                    onClick={() => setIsAddContactModalOpen(true)}
-                    className="w-full h-12 bg-gray-100 text-black rounded-xl hover:bg-gray-200"
-                  >
-                    <Plus className="w-5 h-5 mr-2" />
-                    Add Contact Manually
-                  </Button>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="contacts" className="space-y-4">
-              {registeredContacts.length > 0 && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-green-600 flex items-center gap-2">
-                      <Check className="w-5 h-5" />
-                      Registered ({registeredContacts.length})
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-2">
-                      {registeredContacts.slice(0, 5).map((contact, index) => (
-                        <div key={index} className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
-                          <div>
-                            <p className="font-medium">{contact.name}</p>
-                            <p className="text-sm text-gray-600">{contact.email}</p>
-                          </div>
-                          <Button size="sm" className="rounded-full">
-                            Chat
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
-              {unregisteredContacts.length > 0 && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center justify-between">
-                      <span className="flex items-center gap-2">
-                        <Users className="w-5 h-5" />
-                        Not Registered ({unregisteredContacts.length})
-                      </span>
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          setSelectedContacts(unregisteredContacts)
-                          setIsInviteModalOpen(true)
-                        }}
-                        className="rounded-full"
-                      >
-                        Invite All
-                      </Button>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-2">
-                      {unregisteredContacts.slice(0, 5).map((contact, index) => (
-                        <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                          <div>
-                            <p className="font-medium">{contact.name}</p>
-                            <p className="text-sm text-gray-600">{contact.email || contact.phone}</p>
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setSelectedContacts([contact])
-                              setIsInviteModalOpen(true)
-                            }}
-                            className="rounded-full"
-                          >
-                            Invite
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-            </TabsContent>
-
-            <TabsContent value="invites" className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Send className="w-5 h-5" />
-                    Sent Invitations ({invitations.length})
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    {invitations.map((invite) => (
-                      <div key={invite.id} className="flex items-center justify-between p-3 border rounded-lg">
-                        <div>
-                          <p className="font-medium">{invite.contact_name}</p>
-                          <p className="text-sm text-gray-600">
-                            via {invite.method} • {new Date(invite.sent_at).toLocaleDateString()}
-                          </p>
-                        </div>
-                        <Badge variant={invite.status === "sent" ? "default" : "secondary"}>{invite.status}</Badge>
-                      </div>
-                    ))}
-                    {invitations.length === 0 && (
-                      <p className="text-center text-gray-500 py-8">No invitations sent yet</p>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-          </Tabs>
+    <div className="min-h-screen bg-white antialiased font-sans">
+      <header className="fixed inset-x-0 top-0 z-40 h-16 bg-white flex items-center justify-between px-4 max-w-md mx-auto mb-4">
+        <div className="flex items-center gap-1">
+          <Button onClick={handleBack} variant="ghost" className="p-0 hover:bg-transparent">
+            <ArrowLeft className="w-5 h-5 text-black" />
+          </Button>
         </div>
-      </div>
+        <div className="flex items-center gap-3">
+          <ModeSwitcher />
+          <Bell className="w-5 h-5 text-black" />
+          <MoreVertical className="w-5 h-5 text-black" />
+        </div>
+      </header>
 
-      {/* Invite Modal */}
-      <Dialog open={isInviteModalOpen} onOpenChange={setIsInviteModalOpen}>
-        <DialogContent className="sm:max-w-[425px] bg-white">
-          <DialogHeader>
-            <DialogTitle>Send Invitations</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div>
-              <Label>Selected Contacts ({selectedContacts.length})</Label>
-              <div className="mt-2 max-h-32 overflow-y-auto">
-                {selectedContacts.map((contact, index) => (
-                  <div key={index} className="text-sm p-2 bg-gray-50 rounded mb-1">
-                    {contact.name}
-                  </div>
+      <div className="max-w-md mx-auto pt-20 px-4 pb-24">
+        <Card className="rounded-2xl border-0 bg-white shadow-lg hover:shadow-xl transition-shadow p-6 mb-6">
+          <h2 className="text-xl font-bold mb-4 text-gray-900">{job.title}</h2>
+          <ul className="space-y-3 text-gray-700">
+            <li className="flex items-center gap-2 text-sm">
+              <Calendar className="w-4 h-4 text-gray-600" />
+              {format(new Date(job.createdAt), "PPP")}
+            </li>
+            <li className="flex items-center gap-2 text-sm">
+              <MapPin className="w-4 h-4 text-gray-600" />
+              {job.location}
+            </li>
+            <li className="flex items-start gap-2 text-sm">
+              <div className="flex flex-wrap gap-1">
+                {job.roles.map((role) => (
+                  <Badge
+                    key={role.id}
+                    variant="outline"
+                    className="bg-white border-gray-300 text-gray-700 capitalize font-normal"
+                  >
+                    {role.role?.toString().replace("-", " ")}
+                  </Badge>
                 ))}
               </div>
-            </div>
+            </li>
+          </ul>
+        </Card>
 
-            <div>
-              <Label>Invite Method</Label>
-              <div className="flex gap-2 mt-2">
-                <Button
-                  variant={inviteMethod === "whatsapp" ? "default" : "outline"}
-                  onClick={() => setInviteMethod("whatsapp")}
-                  className="flex-1"
-                >
-                  <MessageCircle className="w-4 h-4 mr-2" />
-                  WhatsApp
-                </Button>
-                <Button
-                  variant={inviteMethod === "sms" ? "default" : "outline"}
-                  onClick={() => setInviteMethod("sms")}
-                  className="flex-1"
-                >
-                  <Phone className="w-4 h-4 mr-2" />
-                  SMS
-                </Button>
-                <Button
-                  variant={inviteMethod === "email" ? "default" : "outline"}
-                  onClick={() => setInviteMethod("email")}
-                  className="flex-1"
-                >
-                  <Mail className="w-4 h-4 mr-2" />
-                  Email
-                </Button>
-              </div>
-            </div>
+        {job.description ? (
+          <Card className="rounded-2xl border-0 bg-white shadow-lg hover:shadow-xl transition-shadow p-6 mb-6">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Job Description</h3>
+            <p className="text-sm text-gray-700 leading-relaxed">{job.description}</p>
+          </Card>
+        ) : null}
 
-            <div>
-              <Label>Custom Message (Optional)</Label>
-              <Textarea
-                value={customMessage}
-                onChange={(e) => setCustomMessage(e.target.value)}
-                placeholder="Add a personal message to your invitation..."
-                className="mt-2"
-              />
-            </div>
+        <Card className="rounded-2xl border-0 bg-white shadow-lg hover:shadow-xl transition-shadow p-4 mb-6">
+          <h3 className="text-sm font-semibold text-gray-900 mb-4">
+            {mode === "hirer" ? "Select Role" : "Available Roles"}
+          </h3>
+
+          <div className="space-y-3">
+            {job.roles.map((role) => (
+              <button
+                key={role.id}
+                onClick={() => setSelectedRole(role.id)}
+                className={`w-full text-left p-4 rounded-xl transition-all bg-white shadow-sm hover:shadow-md ${
+                  selectedRole === role.id ? "border-2 border-black" : "border border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium text-gray-900 text-sm capitalize">{role.role?.toString().replace("-", " ")}</h4>
+                    <p className="text-xs text-gray-500">
+                      {role.startDate || "-"} - {role.endDate || "-"}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <span className="flex items-center gap-1 font-bold text-gray-900">
+                      <Euro className="w-4 h-4" />
+                      {role.budget}
+                      <span className="text-sm font-normal text-gray-600">/day</span>
+                    </span>
+                  </div>
+                </div>
+              </button>
+            ))}
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsInviteModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleSendInvites} disabled={isLoading}>
-              {isLoading ? "Sending..." : "Send Invites"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Add Contact Modal */}
-      <Dialog open={isAddContactModalOpen} onOpenChange={setIsAddContactModalOpen}>
-        <DialogContent className="sm:max-w-[425px] bg-white">
-          <DialogHeader>
-            <DialogTitle>Add Contact</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div>
-              <Label htmlFor="name">Name *</Label>
-              <Input
-                id="name"
-                value={newContact.name}
-                onChange={(e) => setNewContact({ ...newContact, name: e.target.value })}
-                placeholder="Enter contact name"
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <Label htmlFor="phone">Phone</Label>
-              <Input
-                id="phone"
-                value={newContact.phone}
-                onChange={(e) => setNewContact({ ...newContact, phone: e.target.value })}
-                placeholder="Enter phone number"
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                value={newContact.email}
-                onChange={(e) => setNewContact({ ...newContact, email: e.target.value })}
-                placeholder="Enter email address"
-                className="mt-1"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsAddContactModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleAddContact}>Add Contact</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </Card>
+      </div>
     </div>
   )
 }

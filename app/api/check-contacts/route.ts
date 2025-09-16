@@ -1,53 +1,68 @@
 import { type NextRequest, NextResponse } from "next/server"
 
+const SB_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
+
 interface Contact {
   name: string
   phone?: string
   email?: string
-  isRegistered?: boolean
-}
-
-async function checkUserExists(email: string) {
-  const response = await fetch(
-    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/users?email=eq.${email}&select=email,full_name`,
-    {
-      method: "GET",
-      headers: {
-        apikey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
-        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY!}`,
-      },
-    },
-  )
-  const data = await response.json()
-  return data.length > 0 ? data[0] : null
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { contacts } = await request.json()
+    const body = await request.json()
+    const contacts: Contact[] = Array.isArray(body.contacts) ? body.contacts : []
+
+    if (!contacts.length) {
+      return NextResponse.json({ registered: [], unregistered: [] })
+    }
 
     const registered: Contact[] = []
     const unregistered: Contact[] = []
 
-    // Check each contact against the database
-    for (const contact of contacts) {
-      if (contact.email) {
-        const existingUser = await checkUserExists(contact.email)
+    // For simplicity and safety (no tricky IN quoting), query per contact
+    for (const c of contacts) {
+      let found = null
 
-        if (existingUser) {
-          registered.push({ ...contact, isRegistered: true })
-        } else {
-          unregistered.push({ ...contact, isRegistered: false })
+      if (c.email) {
+        const res = await fetch(
+          `${SB_URL}/rest/v1/users?select=id,email,full_name,phone&email=eq.${encodeURIComponent(c.email)}&limit=1`,
+          {
+            headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
+            cache: "no-store",
+          },
+        )
+        if (res.ok) {
+          const rows = await res.json()
+          found = rows?.[0] || null
         }
+      }
+
+      if (!found && c.phone) {
+        const res = await fetch(
+          `${SB_URL}/rest/v1/users?select=id,email,full_name,phone&phone=eq.${encodeURIComponent(c.phone)}&limit=1`,
+          {
+            headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
+            cache: "no-store",
+          },
+        )
+        if (res.ok) {
+          const rows = await res.json()
+          found = rows?.[0] || null
+        }
+      }
+
+      if (found) {
+        registered.push({ ...c, isRegistered: true })
       } else {
-        // If no email, assume unregistered
-        unregistered.push({ ...contact, isRegistered: false })
+        unregistered.push({ ...c, isRegistered: false })
       }
     }
 
     return NextResponse.json({ registered, unregistered })
   } catch (error) {
-    console.error("Check contacts error:", error)
-    return NextResponse.json({ success: false, message: "Failed to check contacts" }, { status: 500 })
+    console.error("check-contacts error:", error)
+    return NextResponse.json({ registered: [], unregistered: [] }, { status: 200 })
   }
 }

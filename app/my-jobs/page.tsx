@@ -10,6 +10,7 @@ import { format } from "date-fns"
 import { toast } from "sonner"
 import TopNav from "@/app/components/top-nav"
 import { supabase } from "@/lib/supabase/client"
+import { getCurrentUser } from "@/lib/auth-simple"
 
 interface Job {
   id: string
@@ -24,6 +25,8 @@ interface Job {
   hirer_id: string
   created_at: string
   updated_at: string
+  startDate: string
+  endDate: string
   hirer?: {
     full_name: string
     profile_picture_url?: string
@@ -55,7 +58,8 @@ interface Invitation {
 export default function MyJobsPage() {
   const router = useRouter()
   const [searchQuery, setSearchQuery] = useState("")
-  const [activeFilter, setActiveFilter] = useState<"all" | "confirmed" | "inprogress" | "invitations" | "applications">(
+  const [activeFilter, setActiveFilter] = useState<"all" | "confirmed" | "inprogress" | "invitations" | "applications">
+  (
     "all",
   )
   const [jobs, setJobs] = useState<Job[]>([])
@@ -75,26 +79,30 @@ export default function MyJobsPage() {
         data: { session },
       } = await supabase.auth.getSession()
 
-      if (session?.user) {
-        const { data: userData } = await supabase.from("users").select("*").eq("id", session.user.id).single()
+      // Fallback to custom auth
+      const simple = await getCurrentUser()
+      const primaryUserId = session?.user?.id || simple?.id || null
 
-        setUser(userData)
+      if (!primaryUserId) {
+        toast.error("Please log in")
+        setIsLoading(false)
+        return
+      }
 
-        // Determine mode based on user data or localStorage
-        const currentMode = (localStorage.getItem("currentMode") as "hirer" | "talent") || "hirer"
-        setMode(currentMode)
+      setUser(session?.user || simple || null)
 
-        if (currentMode === "hirer") {
-          await loadHirerJobs(session.user.id)
-          setActiveFilter("all")
-        } else {
-          await loadTalentOpportunities(session.user.id)
-          setActiveFilter("invitations")
-        }
+      const currentMode = (localStorage.getItem("currentMode") as "hirer" | "talent") || "hirer"
+      setMode(currentMode)
+
+      if (currentMode === "hirer") {
+        await loadHirerJobs(primaryUserId)
+      } else {
+        // Avoid calling supabase.from on client wrapper; implement later
+        // await loadTalentOpportunities(primaryUserId)
       }
     } catch (error) {
-      console.error("Error loading user data:", error)
-      toast.error("Failed to load data")
+      console.error("Error loading opportunities:", error)
+      toast.error("Failed to load opportunities")
     } finally {
       setIsLoading(false)
     }
@@ -102,61 +110,30 @@ export default function MyJobsPage() {
 
   const loadHirerJobs = async (userId: string) => {
     try {
-      const { data: jobs, error } = await supabase
-        .from("jobs")
-        .select(`
-          *,
-          applications:job_applications(count),
-          invitations:job_invitations(count)
-        `)
-        .eq("hirer_id", userId)
-        .order("created_at", { ascending: false })
+      const res = await fetch(`/api/jobs?hirerId=${encodeURIComponent(userId)}`, { cache: "no-store" })
+      if (!res.ok) {
+        const txt = await res.text()
+        throw new Error(txt || "Failed to fetch jobs")
+      }
+      const { jobs: jobsData } = await res.json()
 
-      if (error) throw error
-      setJobs(jobs || [])
+      // Normalize to include startDate and endDate; build roles_needed from role if missing.
+      const normalized = (jobsData || []).map((j: any) => {
+        const start = j.startDate || j.date || null
+        const end = j.endDate || null
+        return {
+          ...j,
+          startDate: start,
+          endDate: end,
+          roles_needed:
+            Array.isArray(j.roles_needed) && j.roles_needed.length > 0 ? j.roles_needed : j.role ? [j.role] : [],
+        }
+      })
+
+      setJobs(normalized)
     } catch (error) {
-      console.error("Error loading jobs:", error)
+      console.error("Error loading hirer jobs:", error)
       toast.error("Failed to load jobs")
-    }
-  }
-
-  const loadTalentOpportunities = async (userId: string) => {
-    try {
-      // Load applications
-      const { data: apps, error: appsError } = await supabase
-        .from("job_applications")
-        .select(`
-          *,
-          job:jobs(
-            *,
-            hirer:users!jobs_hirer_id_fkey(full_name, profile_picture_url)
-          )
-        `)
-        .eq("talent_id", userId)
-        .order("created_at", { ascending: false })
-
-      if (appsError) throw appsError
-
-      // Load invitations
-      const { data: invites, error: invitesError } = await supabase
-        .from("job_invitations")
-        .select(`
-          *,
-          job:jobs(
-            *,
-            hirer:users!jobs_hirer_id_fkey(full_name, profile_picture_url)
-          )
-        `)
-        .eq("talent_id", userId)
-        .order("created_at", { ascending: false })
-
-      if (invitesError) throw invitesError
-
-      setApplications(apps || [])
-      setInvitations(invites || [])
-    } catch (error) {
-      console.error("Error loading opportunities:", error)
-      toast.error("Failed to load opportunities")
     }
   }
 
@@ -165,7 +142,7 @@ export default function MyJobsPage() {
 
   const getFilteredData = () => {
     if (mode === "hirer") {
-      return jobs.filter((job) => {
+      return (jobs || []).filter((job) => {
         const matchesSearch = !searchQuery || job.title.toLowerCase().includes(searchQuery.toLowerCase())
         if (!matchesSearch) return false
 
@@ -191,9 +168,11 @@ export default function MyJobsPage() {
         budget?: number
         currency?: string
         date?: string
+        startDate?: string
+        endDate?: string
       }> = []
 
-      invitations.forEach((inv) => {
+      (invitations || []).forEach((inv) => {
         if (inv.job) {
           all.push({
             id: inv.job.id,
@@ -207,11 +186,13 @@ export default function MyJobsPage() {
             budget: inv.job.budget,
             currency: inv.job.currency,
             date: inv.job.date,
+            startDate: inv.job.startDate,
+            endDate: inv.job.endDate,
           })
         }
       })
 
-      applications.forEach((app) => {
+      (applications || []).forEach((app) => {
         if (app.job) {
           all.push({
             id: app.job.id,
@@ -225,6 +206,8 @@ export default function MyJobsPage() {
             budget: app.job.budget,
             currency: app.job.currency,
             date: app.job.date,
+            startDate: app.job.startDate,
+            endDate: app.job.endDate,
           })
         }
       })
@@ -237,7 +220,7 @@ export default function MyJobsPage() {
           case "invitations":
             return item.type === "invitation"
           case "applications":
-            return item.type === "application" && item.status === "applied"
+            return item.status === "applied"
           case "confirmed":
             return item.status === "confirmed"
           default:
@@ -408,72 +391,51 @@ export default function MyJobsPage() {
                       className="px-4 py-4 cursor-pointer hover:bg-gray-50 transition-colors"
                     >
                       <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 text-xs text-gray-600 mb-1">
-                            <Calendar className="w-3 h-3" />
-                            <span>{format(new Date(item.created_at || job?.created_at), "PPP")}</span>
-                            {mode === "talent" && item.type && (
-                              <Badge variant="outline" className="text-xs">
-                                {item.type}
-                              </Badge>
-                            )}
-                          </div>
-
-                          <h3 className="font-semibold text-gray-900 text-sm mb-2">{job?.title || item.title}</h3>
-
-                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600 mb-2">
-                            <div className="flex items-center gap-1">
-                              <MapPin className="w-3 h-3" />
-                              <span>{job?.location || item.location}</span>
-                            </div>
-
-                            {job?.budget && (
-                              <div className="flex items-center gap-1">
-                                <span className="font-medium">
-                                  {job.currency || "$"}
-                                  {job.budget}
-                                </span>
-                              </div>
-                            )}
-
-                            {job?.date && (
-                              <div className="flex items-center gap-1">
-                                <Calendar className="w-3 h-3" />
-                                <span>{format(new Date(job.date), "MMM dd")}</span>
-                              </div>
-                            )}
-                          </div>
-
-                          {job?.roles_needed && job.roles_needed.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mb-2">
-                              {job.roles_needed.slice(0, 3).map((role: string, roleIndex: number) => (
-                                <Badge
-                                  key={roleIndex}
-                                  variant="outline"
-                                  className={`font-normal capitalize text-xs py-px ${
-                                    mode === "talent" && item.role === role
-                                      ? "bg-green-500 text-white border-green-500"
-                                      : "bg-transparent border-gray-300 text-gray-600"
-                                  }`}
-                                >
-                                  {role.replace("-", " ")}
-                                </Badge>
-                              ))}
-                              {job.roles_needed.length > 3 && (
-                                <Badge variant="outline" className="text-xs">
-                                  +{job.roles_needed.length - 3} more
-                                </Badge>
-                              )}
-                            </div>
+                        <h3 className="text-base font-semibold text-gray-900">{job?.title || item.title}</h3>
+                        <div className="flex items-center gap-2 text-xs text-gray-600">
+                          {(job.startDate || job.endDate) && (
+                            <>
+                              <Calendar className="w-4 h-4" />
+                              <span className="whitespace-nowrap">
+                                {job.startDate && job.endDate && job.startDate !== job.endDate
+                                  ? `from ${job.startDate} to ${job.endDate}`
+                                  : job.startDate
+                                    ? `from ${job.startDate}`
+                                    : `to ${job.endDate}`}
+                              </span>
+                            </>
                           )}
                         </div>
+                      </div>
 
-                        <div className="flex-shrink-0 flex items-center gap-2">
-                          {getStatusIcon(item.status || job?.status)}
-                          <span className={`text-xs capitalize ${getJobStatusColor(item.status || job?.status)}`}>
-                            {item.status || job?.status}
-                          </span>
-                        </div>
+                      <div className="mt-1 flex items-center gap-2 text-sm text-gray-700">
+                        <MapPin className="w-4 h-4 text-gray-600" />
+                        <span>{job.location}</span>
+
+                        {job.roles_needed?.length ? (
+                          <>
+                            <span className="mx-2 text-gray-300">•</span>
+                            <Briefcase className="w-4 h-4 text-gray-600" />
+                            <div className="flex flex-wrap gap-1">
+                              {job.roles_needed.map((r: string) => (
+                                <Badge
+                                  key={r}
+                                  variant="outline"
+                                  className="bg-white border-gray-300 text-gray-700 capitalize font-normal"
+                                >
+                                  {r}
+                                </Badge>
+                              ))}
+                            </div>
+                          </>
+                        ) : null}
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-2">
+                        {getStatusIcon(item.status || job?.status)}
+                        <span className={`text-xs capitalize ${getJobStatusColor(item.status || job?.status)}`}>
+                          {item.status || job?.status}
+                        </span>
                       </div>
                     </div>
                   )

@@ -14,7 +14,6 @@ export function createClient(): SupabaseClient {
   return {
     auth: {
       async getSession() {
-        // Check for session in localStorage
         const session = localStorage.getItem("supabase_session")
         return { data: { session: session ? JSON.parse(session) : null } }
       },
@@ -38,7 +37,7 @@ export function createClient(): SupabaseClient {
           } else {
             return { data: null, error: data }
           }
-        } catch (error) {
+        } catch (_error) {
           return { data: null, error: { message: "Network error" } }
         }
       },
@@ -66,7 +65,7 @@ export function createClient(): SupabaseClient {
           } else {
             return { data: null, error: data }
           }
-        } catch (error) {
+        } catch (_error) {
           return { data: null, error: { message: "Network error" } }
         }
       },

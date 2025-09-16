@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
       .from("conversations")
       .select(`
         *,
-        job:jobs(title, role),
+        job:jobs(title),
         hirer:users!conversations_hirer_id_fkey(full_name, profile_picture_url),
         talent:users!conversations_talent_id_fkey(full_name, profile_picture_url, roles, location)
       `)

@@ -1,49 +1,41 @@
 "use client"
 
-import type React from "react"
-
 import { useEffect, useState } from "react"
 import { useRouter, useParams } from "next/navigation"
 import {
   ArrowLeft,
   Bell,
   Calendar,
-  CheckCircle,
   Euro,
   MapPin,
   MoreVertical,
-  Send,
   Users,
+  CheckCircle,
   UserPlus,
   XCircle,
 } from "lucide-react"
 import { format } from "date-fns"
 
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent } from "@/components/ui/tabs"
 import ModeSwitcher from "@/components/mode-switcher"
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
-import { cn } from "@/lib/utils"
 import { Card } from "@/components/ui/card"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 import {
-  getJobById,
+  getCurrentMode,
   getInvitationsForJob,
   getApplicationsForJob,
-  updateInvitationStatus,
   getTalentById,
+  updateInvitationStatus,
   confirmTalent,
-  hasAppliedForRole,
-  saveApplication,
-  generateId,
-  getCurrentMode,
   type Job,
   type Invitation,
   type Application,
   type Talent,
 } from "@/lib/data-store"
-import { toast } from "sonner"
+
+// ... keep other existing imports if present ...
 
 interface TalentWithStatus extends Talent {
   status: string
@@ -55,23 +47,62 @@ export default function JobDetailPage() {
   const jobId = params.id as string
 
   const [job, setJob] = useState<Job | null>(null)
+  const [selectedRole, setSelectedRole] = useState<string>("")
+  const [mode, setMode] = useState<"hirer" | "talent">("hirer")
+  const [loading, setLoading] = useState(true)
+
+  // Added: invitations/applications + active tab
   const [invitations, setInvitations] = useState<Invitation[]>([])
   const [applications, setApplications] = useState<Application[]>([])
-  const [selectedRole, setSelectedRole] = useState<string>("")
   const [activeTab, setActiveTab] = useState<"invited" | "applications" | "confirmed">("invited")
-  const [mode, setMode] = useState<"hirer" | "talent">("hirer")
 
   useEffect(() => {
     const m = getCurrentMode()
     setMode(m)
-
-    const j = getJobById(jobId)
-    if (j) {
-      setJob(j)
-      setSelectedRole(j.roles[0]?.id || "")
-      setInvitations(getInvitationsForJob(jobId))
-      setApplications(getApplicationsForJob(jobId))
-    }
+    setLoading(true)
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/jobs?id=${encodeURIComponent(jobId)}`, { cache: "no-store" })
+        if (res.ok) {
+          const { job: dbJob } = await res.json()
+          if (dbJob) {
+            const mapped: Job = {
+              id: dbJob.id,
+              title: dbJob.title,
+              description: dbJob.description || "",
+              location: dbJob.location || "",
+              createdAt: dbJob.created_at || new Date().toISOString(),
+              roles: [
+                {
+                  id: "primary",
+                  role: (dbJob.roles_needed?.[0] || dbJob.role || "unspecified") as string,
+                  startDate: dbJob.start_date || dbJob.date || "",
+                  endDate:
+                    dbJob.end_date ||
+                    (dbJob.deadline ? new Date(dbJob.deadline).toISOString().slice(0, 10) : dbJob.date || ""),
+                  budget: dbJob.budget ?? 0,
+                },
+              ],
+              hirerId: dbJob.hirer_id || "",
+              invitedTalentIds: [],
+              status: dbJob.status || "active",
+            }
+            setJob(mapped)
+            setSelectedRole(mapped.roles[0]?.id || "")
+            // Load invites/apps from mock store (DB wiring can come later)
+            setInvitations(getInvitationsForJob(dbJob.id))
+            setApplications(getApplicationsForJob(dbJob.id))
+            setLoading(false)
+            return
+          }
+        }
+        setJob(null)
+      } catch {
+        setJob(null)
+      } finally {
+        setLoading(false)
+      }
+    })()
   }, [jobId])
 
   useEffect(() => {
@@ -80,51 +111,9 @@ export default function JobDetailPage() {
 
   const handleBack = () => router.back()
 
-  const handleTalentClick = (talentSlug: string) => {
-    router.push(`/talent/${talentSlug}?from=job&jobId=${jobId}`)
-  }
-
-  const handleConfirm = (tid: string, roleId: string) => {
-    try {
-      confirmTalent(jobId, tid, roleId)
-      setApplications(getApplicationsForJob(jobId))
-      toast.success("Talent confirmed successfully!")
-    } catch {
-      toast.error("Failed to confirm talent. Please try again.")
-    }
-  }
-
-  const handleApplyForRole = (roleId: string) => {
-    try {
-      const application: Application = {
-        id: generateId(),
-        jobId,
-        talentId: "1",
-        roleId,
-        status: "applied",
-        createdAt: new Date().toISOString(),
-      }
-      saveApplication(application)
-      setApplications(getApplicationsForJob(jobId))
-      toast.success("Application submitted successfully!")
-    } catch {
-      toast.error("Failed to submit application. Please try again.")
-    }
-  }
-
-  const handleInvitationResponse = (invId: string, response: "accepted" | "declined") => {
-    try {
-      updateInvitationStatus(invId, response)
-      setInvitations(getInvitationsForJob(jobId))
-      toast.success(`Invitation ${response} successfully!`)
-    } catch {
-      toast.error("Failed to respond to invitation. Please try again.")
-    }
-  }
-
+  // Helpers for talents lists
   const getTalentsForSection = (section: "invited" | "applications" | "confirmed"): TalentWithStatus[] => {
     if (!job || !selectedRole) return []
-
     switch (section) {
       case "invited":
         return invitations
@@ -134,7 +123,6 @@ export default function JobDetailPage() {
             return t ? { ...t, status: inv.status } : null
           })
           .filter(Boolean) as TalentWithStatus[]
-
       case "applications":
         return applications
           .filter((app) => app.roleId === selectedRole && app.status === "applied")
@@ -143,7 +131,6 @@ export default function JobDetailPage() {
             return t ? { ...t, status: app.status } : null
           })
           .filter(Boolean) as TalentWithStatus[]
-
       case "confirmed":
         return applications
           .filter((app) => app.roleId === selectedRole && app.status === "confirmed")
@@ -152,14 +139,36 @@ export default function JobDetailPage() {
             return t ? { ...t, status: app.status } : null
           })
           .filter(Boolean) as TalentWithStatus[]
-
       default:
         return []
     }
   }
 
-  const currentInvitation = invitations.find((inv) => inv.talentId === "1" && inv.roleId === selectedRole)
-  const hasApplied = hasAppliedForRole("1", jobId, selectedRole)
+  const handleInvitationResponse = (invId: string, response: "accepted" | "declined") => {
+    try {
+      updateInvitationStatus(invId, response)
+      setInvitations(getInvitationsForJob(jobId))
+    } catch {
+      // no-op UI error toast here to keep changes minimal
+    }
+  }
+
+  const handleConfirm = (tid: string, roleId: string) => {
+    try {
+      confirmTalent(jobId, tid, roleId)
+      setApplications(getApplicationsForJob(jobId))
+    } catch {
+      // no-op UI error toast here to keep changes minimal
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-black"></div>
+      </div>
+    )
+  }
 
   if (!job) {
     return (
@@ -189,6 +198,7 @@ export default function JobDetailPage() {
       </header>
 
       <div className="max-w-md mx-auto pt-20 px-4 pb-24">
+        {/* Summary */}
         <Card className="rounded-2xl border-0 bg-white shadow-lg hover:shadow-xl transition-shadow p-6 mb-6">
           <h2 className="text-xl font-bold mb-4 text-gray-900">{job.title}</h2>
           <ul className="space-y-3 text-gray-700">
@@ -209,7 +219,7 @@ export default function JobDetailPage() {
                     variant="outline"
                     className="bg-white border-gray-300 text-gray-700 capitalize font-normal"
                   >
-                    {role.role.replace("-", " ")}
+                    {role.role?.toString().replace("-", " ")}
                   </Badge>
                 ))}
               </div>
@@ -217,15 +227,20 @@ export default function JobDetailPage() {
           </ul>
         </Card>
 
-        <Card className="rounded-2xl border-0 bg-white shadow-lg hover:shadow-xl transition-shadow p-6 mb-6">
-          <h3 className="text-sm font-semibold text-gray-900 mb-4">Job Description</h3>
-          <p className="text-sm text-gray-700 leading-relaxed">{job.description}</p>
-        </Card>
+        {/* Description */}
+        {job.description ? (
+          <Card className="rounded-2xl border-0 bg-white shadow-lg hover:shadow-xl transition-shadow p-6 mb-6">
+            <h3 className="text-sm font-semibold text-gray-900 mb-4">Job Description</h3>
+            <p className="text-sm text-gray-700 leading-relaxed">{job.description}</p>
+          </Card>
+        ) : null}
 
+        {/* Roles list */}
         <Card className="rounded-2xl border-0 bg-white shadow-lg hover:shadow-xl transition-shadow p-4 mb-6">
           <h3 className="text-sm font-semibold text-gray-900 mb-4">
             {mode === "hirer" ? "Select Role" : "Available Roles"}
           </h3>
+
           <div className="space-y-3">
             {job.roles.map((role) => (
               <button
@@ -237,9 +252,9 @@ export default function JobDetailPage() {
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <h4 className="font-medium text-gray-900 text-sm capitalize">{role.role.replace("-", " ")}</h4>
+                    <h4 className="font-medium text-gray-900 text-sm capitalize">{role.role?.toString().replace("-", " ")}</h4>
                     <p className="text-xs text-gray-500">
-                      {role.startDate} - {role.endDate}
+                      {role.startDate || "-"} - {role.endDate || "-"}
                     </p>
                   </div>
                   <div className="text-right">
@@ -250,22 +265,75 @@ export default function JobDetailPage() {
                     </span>
                   </div>
                 </div>
+              </button>
+            ))}
+          </div>
+        </Card>
 
-                {mode === "talent" && selectedRole === role.id && (
-                  <div className="mt-3 pt-3 border-t border-gray-200">
-                    {currentInvitation ? (
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-blue-600 font-medium">You're invited to this role</span>
+        {/* Hirer: Invited / Applications / Confirmed */}
+        {mode === "hirer" && selectedRole && (
+          <Card className="rounded-2xl border-0 bg-white shadow-lg hover:shadow-xl transition-shadow p-4">
+            {/* Simple tabs (buttons) */}
+            <div className="bg-gradient-to-r from-gray-50 to-white shadow-inner p-1 rounded-full mb-4">
+              <div className="grid grid-cols-3 gap-1">
+                <Button
+                  onClick={() => setActiveTab("invited")}
+                  variant="ghost"
+                  className={`justify-center rounded-full text-sm font-medium h-8 px-2 ${
+                    activeTab === "invited" ? "bg-white text-black shadow-sm" : "bg-transparent text-gray-500"
+                  }`}
+                >
+                  Invited ({invitedTalents.length})
+                </Button>
+                <Button
+                  onClick={() => setActiveTab("applications")}
+                  variant="ghost"
+                  className={`justify-center rounded-full text-sm font-medium h-8 px-2 ${
+                    activeTab === "applications" ? "bg-white text-black shadow-sm" : "bg-transparent text-gray-500"
+                  }`}
+                >
+                  Applications ({applicationTalents.length})
+                </Button>
+                <Button
+                  onClick={() => setActiveTab("confirmed")}
+                  variant="ghost"
+                  className={`justify-center rounded-full text-sm font-medium h-8 px-2 ${
+                    activeTab === "confirmed" ? "bg-white text-black shadow-sm" : "bg-transparent text-gray-500"
+                  }`}
+                >
+                  Confirmed ({confirmedTalents.length})
+                </Button>
+              </div>
+            </div>
 
-                        {currentInvitation.status === "pending" && (
+            {/* Lists */}
+            <div className="space-y-2">
+              {activeTab === "invited" &&
+                (invitedTalents.length ? (
+                  invitedTalents.map((t) => {
+                    // Find invitation to show actions if pending
+                    const inv = invitations.find((i) => i.talentId === t.id && i.roleId === selectedRole)
+                    return (
+                      <div
+                        key={t.id}
+                        className="flex items-center justify-between p-3 rounded-xl border border-gray-200 bg-white"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Avatar className="h-8 w-8">
+                            <AvatarImage src={t.avatar || ""} alt={t.name} />
+                            <AvatarFallback>{t.name?.[0] || "T"}</AvatarFallback>
+                          </Avatar>
+                          <div>
+                            <div className="text-sm font-medium text-gray-900">{t.name}</div>
+                            <div className="text-xs text-gray-500 capitalize">{t.role?.replace("-", " ")}</div>
+                          </div>
+                        </div>
+                        {inv?.status === "pending" ? (
                           <div className="flex gap-2">
                             <Button
                               size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleInvitationResponse(currentInvitation.id, "accepted")
-                              }}
-                              className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 text-xs"
+                              className="rounded-full h-7 px-3 bg-black text-white"
+                              onClick={() => handleInvitationResponse(inv.id, "accepted")}
                             >
                               <CheckCircle className="w-3 h-3 mr-1" />
                               Accept
@@ -273,182 +341,84 @@ export default function JobDetailPage() {
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleInvitationResponse(currentInvitation.id, "declined")
-                              }}
-                              className="border-red-300 text-red-600 hover:bg-red-50 px-3 py-1 text-xs"
+                              className="rounded-full h-7 px-3"
+                              onClick={() => handleInvitationResponse(inv.id, "declined")}
                             >
                               <XCircle className="w-3 h-3 mr-1" />
                               Decline
                             </Button>
                           </div>
-                        )}
-
-                        {currentInvitation.status === "accepted" && (
-                          <span className="text-xs text-green-600 font-medium">Invitation Accepted</span>
-                        )}
-                        {currentInvitation.status === "declined" && (
-                          <span className="text-xs text-red-600 font-medium">Invitation Declined</span>
+                        ) : (
+                          <span className="text-xs text-gray-600">{inv?.status || t.status}</span>
                         )}
                       </div>
-                    ) : hasApplied ? (
-                      <span className="text-xs text-green-600 font-medium">Application Submitted</span>
-                    ) : (
+                    )
+                  })
+                ) : (
+                  <p className="text-sm text-gray-500 text-center py-6">No invited talents for this role</p>
+                ))}
+
+              {activeTab === "applications" &&
+                (applicationTalents.length ? (
+                  applicationTalents.map((t) => (
+                    <div
+                      key={t.id}
+                      className="flex items-center justify-between p-3 rounded-xl border border-gray-200 bg-white"
+                    >
+                      <div className="flex items-center gap-3">
+                        <Avatar className="h-8 w-8">
+                          <AvatarImage src={t.avatar || ""} alt={t.name} />
+                          <AvatarFallback>{t.name?.[0] || "T"}</AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <div className="text-sm font-medium text-gray-900">{t.name}</div>
+                          <div className="text-xs text-gray-500 capitalize">{t.role?.replace("-", " ")}</div>
+                        </div>
+                      </div>
                       <Button
                         size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleApplyForRole(role.id)
-                        }}
-                        className="bg-black hover:bg-gray-800 text-white px-4 py-2 text-xs"
+                        className="rounded-full h-7 px-3 bg-black text-white"
+                        onClick={() => handleConfirm(t.id, selectedRole)}
                       >
-                        <Send className="w-3 h-3 mr-1" />
-                        Apply for this role
+                        <UserPlus className="w-3 h-3 mr-1" />
+                        Confirm
                       </Button>
-                    )}
-                  </div>
-                )}
-              </button>
-            ))}
-          </div>
-        </Card>
-
-        {mode === "hirer" && (
-          <Card className="rounded-2xl border-0 bg-white shadow-lg hover:shadow-xl transition-shadow p-4">
-            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as any)} className="w-full">
-              <div className="bg-gradient-to-r from-gray-50 to-white shadow-inner p-1 rounded-full mb-4">
-                <div className="grid grid-cols-3 gap-1">
-                  <Button
-                    onClick={() => setActiveTab("invited")}
-                    variant="ghost"
-                    className={`justify-center rounded-full text-sm font-medium h-8 px-2 ${
-                      activeTab === "invited" ? "bg-white text-black shadow-sm" : "bg-transparent text-gray-500"
-                    }`}
-                  >
-                    Invited ({getTalentsForSection("invited")?.length || 0})
-                  </Button>
-                  <Button
-                    onClick={() => setActiveTab("applications")}
-                    variant="ghost"
-                    className={`justify-center rounded-full text-sm font-medium h-8 px-2 ${
-                      activeTab === "applications" ? "bg-white text-black shadow-sm" : "bg-transparent text-gray-500"
-                    }`}
-                  >
-                    Applications ({getTalentsForSection("applications")?.length || 0})
-                  </Button>
-                  <Button
-                    onClick={() => setActiveTab("confirmed")}
-                    variant="ghost"
-                    className={`justify-center rounded-full text-sm font-medium h-8 px-2 ${
-                      activeTab === "confirmed" ? "bg-white text-black shadow-sm" : "bg-transparent text-gray-500"
-                    }`}
-                  >
-                    Confirmed ({getTalentsForSection("confirmed")?.length || 0})
-                  </Button>
-                </div>
-              </div>
-
-              <TabsContent value="invited" className="mt-0">
-                {invitedTalents.length ? (
-                  invitedTalents.map((talent) => (
-                    <TalentRow key={talent.id} talent={talent} onClick={() => handleTalentClick(talent.slug)} />
+                    </div>
                   ))
                 ) : (
-                  <EmptyState message="No invited talents for this role yet" />
-                )}
-              </TabsContent>
+                  <p className="text-sm text-gray-500 text-center py-6">No applications for this role yet</p>
+                ))}
 
-              <TabsContent value="applications" className="mt-0">
-                {applicationTalents.length ? (
-                  applicationTalents.map((talent) => (
-                    <TalentRow
-                      key={talent.id}
-                      talent={talent}
-                      action={
-                        <Button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleConfirm(talent.id, selectedRole)
-                          }}
-                          className="bg-black hover:bg-gray-800 text-white px-4 py-2 rounded-full text-xs flex items-center gap-1"
-                        >
-                          <UserPlus className="w-3 h-3" />
-                          Confirm
-                        </Button>
-                      }
-                      onClick={() => handleTalentClick(talent.slug)}
-                    />
+              {activeTab === "confirmed" &&
+                (confirmedTalents.length ? (
+                  confirmedTalents.map((t) => (
+                    <div
+                      key={t.id}
+                      className="flex items-center justify-between p-3 rounded-xl border border-gray-200 bg-white"
+                    >
+                      <div className="flex items-center gap-3">
+                        <Avatar className="h-8 w-8">
+                          <AvatarImage src={t.avatar || ""} alt={t.name} />
+                          <AvatarFallback>{t.name?.[0] || "T"}</AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <div className="text-sm font-medium text-gray-900">{t.name}</div>
+                          <div className="text-xs text-gray-500 capitalize">{t.role?.replace("-", " ")}</div>
+                        </div>
+                      </div>
+                      <span className="inline-flex items-center text-xs text-green-700 bg-green-50 border border-green-200 px-2 py-1 rounded-full">
+                        <CheckCircle className="w-3 h-3 mr-1" />
+                        Confirmed
+                      </span>
+                    </div>
                   ))
                 ) : (
-                  <EmptyState message="No applications for this role yet" />
-                )}
-              </TabsContent>
-
-              <TabsContent value="confirmed" className="mt-0">
-                {confirmedTalents.length ? (
-                  confirmedTalents.map((talent) => (
-                    <TalentRow
-                      key={talent.id}
-                      talent={talent}
-                      statusBadge="Confirmed"
-                      onClick={() => handleTalentClick(talent.slug)}
-                    />
-                  ))
-                ) : (
-                  <EmptyState message="No confirmed talents for this role yet" />
-                )}
-              </TabsContent>
-            </Tabs>
+                  <p className="text-sm text-gray-500 text-center py-6">No confirmed talents yet</p>
+                ))}
+            </div>
           </Card>
         )}
       </div>
     </div>
   )
-}
-
-interface TalentWithStatusRowProps {
-  talent: TalentWithStatus
-  onClick: () => void
-  action?: React.ReactNode
-  statusBadge?: string
-}
-
-function TalentRow({ talent, onClick, action, statusBadge }: TalentWithStatusRowProps) {
-  return (
-    <button type="button" onClick={onClick} className="w-full mb-3">
-      <div className="w-full flex items-center justify-between py-3 px-4 rounded-xl bg-white border-0 shadow-sm hover:shadow-md transition-shadow">
-        <div className="flex items-center gap-3 text-left">
-          <Avatar className="w-10 h-10">
-            <AvatarImage src={talent.avatar || "/placeholder.svg"} alt={talent.name} />
-            <AvatarFallback>{talent.name.charAt(0)}</AvatarFallback>
-          </Avatar>
-          <div>
-            <p className="text-sm font-medium text-gray-900">{talent.name}</p>
-            <p className="text-xs text-gray-600 capitalize">{talent.role}</p>
-            <p className="text-xs text-gray-500">{talent.location}</p>
-          </div>
-        </div>
-        {action ? (
-          action
-        ) : statusBadge ? (
-          <Badge className="text-xs bg-green-100 text-green-800 font-medium">{statusBadge}</Badge>
-        ) : talent.status ? (
-          <Badge
-            className={cn("text-xs capitalize font-medium", {
-              "bg-green-100 text-green-800": talent.status === "accepted",
-              "bg-red-100 text-red-800": talent.status === "declined",
-              "bg-gray-100 text-gray-800": talent.status === "pending",
-            })}
-          >
-            {talent.status}
-          </Badge>
-        ) : null}
-      </div>
-    </button>
-  )
-}
-
-function EmptyState({ message }: { message: string }) {
-  return <p className="text-center text-sm text-gray-500 py-8">{message}</p>
 }

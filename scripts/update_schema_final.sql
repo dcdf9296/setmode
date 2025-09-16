@@ -154,4 +154,107 @@ BEGIN
 END;
 $$;
 
--- ... existing code ...
+-- Ensure job_roles table exists (used for multi-role jobs)
+CREATE TABLE IF NOT EXISTS job_roles (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  job_id UUID REFERENCES jobs(id) ON DELETE CASCADE,
+  role VARCHAR NOT NULL,
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  budget INTEGER NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_roles_job_id ON job_roles(job_id);
+CREATE INDEX IF NOT EXISTS idx_job_roles_role ON job_roles(role);
+
+-- Allow job.role to be nullable (first role stored for quick filter)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'jobs' AND column_name = 'role'
+  ) THEN
+    ALTER TABLE jobs ALTER COLUMN role DROP NOT NULL;
+  END IF;
+END;
+$$;
+
+-- Optional: store array of roles for quick filters
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS roles_needed TEXT[] DEFAULT '{}';
+
+-- Add job_role_id to job_applications so invitations/applications are per role
+ALTER TABLE job_applications
+  ADD COLUMN IF NOT EXISTS job_role_id UUID REFERENCES job_roles(id) ON DELETE CASCADE;
+
+-- Replace old unique constraint (job_id, talent_id) with (job_id, talent_id, job_role_id)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'job_applications_job_id_talent_id_key'
+  ) THEN
+    ALTER TABLE job_applications DROP CONSTRAINT job_applications_job_id_talent_id_key;
+  END IF;
+END;
+$$;
+
+ALTER TABLE job_applications
+  ADD CONSTRAINT job_applications_unique UNIQUE (job_id, talent_id, job_role_id);
+
+-- Create job_roles table for multi-role jobs
+CREATE TABLE IF NOT EXISTS job_roles (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  job_id UUID REFERENCES jobs(id) ON DELETE CASCADE,
+  role VARCHAR NOT NULL,          -- e.g., "hair-stylist", "makeup-artist"
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  budget INTEGER NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_roles_job_id ON job_roles(job_id);
+CREATE INDEX IF NOT EXISTS idx_job_roles_role ON job_roles(role);
+
+-- Allow job.role to be nullable (first role stored for quick filter)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'jobs' AND column_name = 'role'
+  ) THEN
+    ALTER TABLE jobs ALTER COLUMN role DROP NOT NULL;
+  END IF;
+END;
+$$;
+
+-- Optional: store array of roles needed for quick filters
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS roles_needed TEXT[] DEFAULT '{}';
+
+-- Optional: allow job.role to be nullable (first role stored for quick filter)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'jobs' AND column_name = 'role'
+  ) THEN
+    ALTER TABLE jobs ALTER COLUMN role DROP NOT NULL;
+  END IF;
+END;
+$$;
+
+-- Optional: store roles_needed array for quick text filters (not required)
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS roles_needed TEXT[] DEFAULT '{}';
+
+-- RLS read policies (optional if using service role). Safe if re-run.
+ALTER TABLE job_roles ENABLE ROW LEVEL SECURITY;
+
+DO $pol$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='job_roles' AND policyname='Public read job_roles'
+  ) THEN
+    CREATE POLICY "Public read job_roles"
+      ON public.job_roles FOR SELECT USING (true);
+  END IF;
+END;
+$pol$;
